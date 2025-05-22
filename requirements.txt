@@ -1,5 +1,14 @@
-
 fastapi
 uvicorn
+python-multipart
 python-dotenv
 openai
+langchain
+langchain-community
+langchain-openai
+chromadb
+numpy
+unstructured
+python-docx
+PyPDF2
+markdown

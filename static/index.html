@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chat Interface</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <nav class="nav-bar">
+            <div class="nav-header">
+                <h2>Settings</h2>
+            </div>
+            <div class="settings-panel">
+                <div class="setting-group">
+                    <label for="maxTokens">Max Tokens</label>
+                    <input type="range" id="maxTokens" min="100" max="4000" value="2000" step="100">
+                    <span class="value-display" id="maxTokensValue">2000</span>
+                </div>
+                <div class="setting-group">
+                    <label for="temperature">Temperature</label>
+                    <input type="range" id="temperature" min="0" max="1" value="0.7" step="0.1">
+                    <span class="value-display" id="temperatureValue">0.7</span>
+                </div>
+                <div class="setting-group">
+                    <label for="model">Model</label>
+                    <select id="model">
+                        <option value="gpt-4">GPT-4</option>
+                        <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                    </select>
+                </div>
+                <button id="saveSettings" class="settings-button">Save Settings</button>
+            </div>
+            <div class="rag-panel">
+                <h3>Document Knowledge</h3>
+                <div class="file-upload">
+                    <input type="file" id="fileInput" multiple accept=".txt,.pdf,.doc,.docx,.md">
+                    <label for="fileInput" class="file-upload-label">
+                        <i class="fas fa-upload"></i> Upload Documents
+                    </label>
+                </div>
+                <div id="uploadedFiles" class="uploaded-files"></div>
+            </div>
+        </nav>
+        <div class="chat-container">
+            <div class="chat-header">
+                <h1>AI Chat</h1>
+                <button id="themeToggle" class="theme-toggle">🌙</button>
+            </div>
+            <div class="tools-bar">
+                <button class="tool-btn" data-command="analyze">/analyze</button>
+                <button class="tool-btn" data-command="translate">/translate</button>
+                <button class="tool-btn" data-command="summarize">/summarize</button>
+                <button class="tool-btn" data-command="classify">/classify</button>
+                <button class="tool-btn" data-command="questions">/questions</button>
+                <button class="tool-btn" data-command="keywords">/keywords</button>
+                <button class="tool-btn" data-command="code">/code</button>
+                <button class="tool-btn" data-command="entities">/entities</button>
+                <button class="tool-btn" data-command="rag">@</button>
+            </div>
+            <div class="messages" id="messages"></div>
+            <div class="input-area">
+                <textarea id="messageInput" placeholder="Type your message here..."></textarea>
+                <button id="sendButton">Send</button>
+            </div>
+        </div>
+    </div>
+    <script src="/static/script.js"></script>
+</body>
+</html> 
