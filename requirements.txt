@@ -3,10 +3,7 @@ uvicorn
 python-multipart
 python-dotenv
 openai
-langchain
-langchain-community
-langchain-openai
-chromadb
+lightrag
 numpy
 unstructured
 python-docx

@@ -8,7 +8,8 @@ import os
 import tempfile
 from dotenv import load_dotenv
 from mcp import MCP
-from rag import RAG
+from document_rag import initialize_rag
+from lightrag.components import LightRAG, QueryParam
 import json
 import asyncio
 import uvicorn
@@ -37,14 +38,14 @@ app.add_middleware(
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Initialize RAG and MCP
+# Initialize MCP and LightRAG
 try:
-    logger.debug("Initializing RAG and MCP")
-    rag = RAG()
+    logger.debug("Initializing MCP and LightRAG")
     mcp = MCP()
-    logger.info("RAG and MCP initialized successfully")
+    app.state.rag = None  # Will be initialized in startup event
+    logger.info("MCP initialized successfully")
 except Exception as e:
-    logger.error(f"Error initializing RAG and MCP: {str(e)}")
+    logger.error(f"Error initializing MCP: {str(e)}")
     raise
 
 # Create temp directory for uploaded files
@@ -77,6 +78,12 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+@app.on_event("startup")
+async def startup_event():
+    if not os.getenv("OPENAI_API_KEY"):
+        raise Exception("OPENAI_API_KEY environment variable is not set")
+    app.state.rag = await initialize_rag()
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for streaming responses."""
@@ -88,9 +95,17 @@ async def websocket_endpoint(websocket: WebSocket):
             
             logger.debug(f"WebSocket message received: {message[:100]}...")
             
-            # Always try to get relevant context
-            context = rag.get_relevant_context(message)
-            logger.debug(f"Retrieved {len(context) if context else 0} relevant chunks")
+            # Get context from LightRAG if available
+            context = None
+            if app.state.rag:
+                try:
+                    response = await app.state.rag.aquery(
+                        message,
+                        param=QueryParam(mode="hybrid")
+                    )
+                    context = response
+                except Exception as e:
+                    logger.error(f"Error getting context from LightRAG: {str(e)}")
             
             # Process message with context
             await mcp.process_message_stream(message, context, websocket)
@@ -110,11 +125,19 @@ async def send_message(message: MessageRequest):
     try:
         logger.debug(f"Processing message: {message.message}")
         
-        # Always try to get relevant context first
-        context = rag.get_relevant_context(message.message)
-        logger.debug(f"Retrieved {len(context) if context else 0} relevant chunks")
+        # Get context from LightRAG if available
+        context = None
+        if app.state.rag and message.useRag:
+            try:
+                response = await app.state.rag.aquery(
+                    message.message,
+                    param=QueryParam(mode="hybrid")
+                )
+                context = response
+            except Exception as e:
+                logger.error(f"Error getting context from LightRAG: {str(e)}")
         
-        # Process message with context if available
+        # Process message with context
         result = await mcp.process_message(message.message, context)
         
         if "error" in result:
@@ -126,20 +149,6 @@ async def send_message(message: MessageRequest):
     except Exception as e:
         logger.error(f"Error in send_message: {str(e)}")
         return {"error": str(e)}
-
-@app.get("/reference/{ref_id}")
-async def get_reference(ref_id: str):
-    """Get content for a specific reference ID."""
-    try:
-        logger.debug(f"Getting reference content for: {ref_id}")
-        content = rag.get_reference_content(ref_id)
-        if not content:
-            logger.warning(f"Reference not found: {ref_id}")
-            raise HTTPException(status_code=404, detail="Reference not found")
-        return JSONResponse(content=content)
-    except Exception as e:
-        logger.error(f"Error getting reference content: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/upload_document")
 async def upload_document(file: UploadFile = File(...)):
@@ -172,43 +181,15 @@ async def upload_document(file: UploadFile = File(...)):
             logger.error(f"Error reading file: {str(e)}")
             raise HTTPException(status_code=400, detail="Error reading file")
         
-        # Process document
+        # Process document with LightRAG
         try:
-            # Create a temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
-                temp_file.write(contents)
-                temp_path = temp_file.name
-
-            try:
-                success = rag.process_document(contents, file.filename)
-                if success:
-                    logger.info(f"Document {file.filename} processed successfully")
-                    return JSONResponse(content={
-                        "message": f"Document {file.filename} processed successfully",
-                        "status": "success"
-                    })
-                else:
-                    # Check if document was already processed
-                    doc_id = rag._generate_document_id(contents)
-                    if doc_id in rag.document_metadata:
-                        logger.info(f"Document {file.filename} was already processed")
-                        return JSONResponse(content={
-                            "message": f"Document {file.filename} was already processed and is available for querying",
-                            "status": "already_processed"
-                        })
-                    else:
-                        logger.warning(f"Failed to process document: {file.filename}")
-                        raise HTTPException(
-                            status_code=400, 
-                            detail="Failed to process document. The file might be too large or in an unsupported format."
-                        )
-            finally:
-                # Clean up temporary file
-                try:
-                    os.unlink(temp_path)
-                except Exception as e:
-                    logger.error(f"Error cleaning up temporary file: {str(e)}")
-                    
+            text = contents.decode('utf-8')
+            await app.state.rag.ainsert(text)
+            logger.info(f"Document {file.filename} processed successfully")
+            return JSONResponse(content={
+                "message": f"Document {file.filename} processed successfully",
+                "status": "success"
+            })
         except Exception as e:
             logger.error(f"Error processing document: {str(e)}")
             raise HTTPException(
@@ -225,45 +206,9 @@ async def upload_document(file: UploadFile = File(...)):
             detail=f"Unexpected error during document upload: {str(e)}"
         )
 
-@app.get("/documents")
-async def get_documents():
-    try:
-        logger.debug("Getting document list")
-        documents = rag.list_documents()
-        return JSONResponse(content={"documents": documents})
-    except Exception as e:
-        logger.error(f"Error getting document list: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/documents/{doc_id}")
-async def delete_document(doc_id: str):
-    try:
-        logger.debug(f"Deleting document: {doc_id}")
-        success = rag.delete_document(doc_id)
-        if not success:
-            logger.warning(f"Document not found: {doc_id}")
-            raise HTTPException(status_code=404, detail="Document not found")
-        logger.info(f"Document {doc_id} deleted successfully")
-        return JSONResponse(content={"message": f"Document {doc_id} deleted successfully"})
-    except Exception as e:
-        logger.error(f"Error deleting document: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/cleanup")
-async def cleanup():
-    try:
-        logger.debug("Starting cleanup")
-        rag.cleanup()
-        logger.info("Cleanup completed successfully")
-        return JSONResponse(content={"message": "Cleanup completed successfully"})
-    except Exception as e:
-        logger.error(f"Error during cleanup: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.get("/")
 async def read_root():
     return FileResponse("static/index.html")
 
 if __name__ == "__main__":
-    logger.info("Starting FastAPI application")
     uvicorn.run(app, host="0.0.0.0", port=8000) 
