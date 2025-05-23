@@ -1,6 +1,6 @@
 import os
 import asyncio
-from typing import Optional
+from typing import Optional, Dict, Any
 from fastapi import FastAPI, UploadFile, HTTPException
 from lightrag.components import LightRAG
 from lightrag.components import QueryParam
@@ -34,24 +34,97 @@ async def upload_document(file: UploadFile):
     try:
         content = await file.read()
         text = content.decode('utf-8')
+        
+        # Insert document into RAG system
         await app.state.rag.ainsert(text)
-        return {"message": "Document uploaded and processed successfully"}
+        
+        # Verify document was processed
+        try:
+            # Test query to verify document processing
+            test_query = "What is this document about?"
+            response = await app.state.rag.aquery(
+                test_query,
+                param=QueryParam(mode="hybrid")
+            )
+            if not response:
+                raise Exception("Document processing verification failed")
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Document uploaded but processing verification failed: {str(e)}"
+            )
+            
+        return {
+            "message": "Document uploaded and processed successfully",
+            "status": "success",
+            "verified": True
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/query")
-async def query_document(query: str, mode: str = "hybrid"):
+async def query_document(query: str, mode: str = "hybrid") -> Dict[str, Any]:
     try:
+        if not app.state.rag:
+            raise HTTPException(
+                status_code=500,
+                detail="RAG system not initialized"
+            )
+            
         if mode not in ["naive", "local", "global", "hybrid"]:
             raise HTTPException(status_code=400, detail="Invalid mode")
         
+        # Get response from RAG
         response = await app.state.rag.aquery(
             query,
             param=QueryParam(mode=mode)
         )
-        return {"response": response}
+        
+        if not response:
+            return {
+                "response": "No relevant information found in the documents.",
+                "status": "no_context"
+            }
+            
+        return {
+            "response": response,
+            "status": "success",
+            "mode": mode
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/status")
+async def get_status() -> Dict[str, Any]:
+    """Get the current status of the RAG system."""
+    try:
+        if not app.state.rag:
+            return {
+                "status": "not_initialized",
+                "message": "RAG system not initialized"
+            }
+            
+        # Check if any documents are processed
+        try:
+            test_query = "What documents are available?"
+            response = await app.state.rag.aquery(
+                test_query,
+                param=QueryParam(mode="naive")
+            )
+            has_documents = bool(response)
+        except:
+            has_documents = False
+            
+        return {
+            "status": "initialized",
+            "has_documents": has_documents,
+            "working_dir": WORKING_DIR
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 @app.on_event("shutdown")
 async def shutdown_event():
