@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import os
@@ -83,29 +84,34 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
             message = data.get("message", "")
-            
+
             logger.debug(f"WebSocket message received: {message[:100]}...")
-            
-            # Get context from LightRAG if documents are uploaded
+
+            # Get context from RAG if documents are uploaded
             context = None
             if app.state.has_documents:
                 try:
                     rag_response = await query_document(message)
-                    if rag_response["status"] == "success":
-                        context = rag_response["response"]
-                        logger.debug("RAG context retrieved successfully")
+                    if rag_response["status"] == "success" and rag_response.get("documents"):
+                        # Format context as list of dicts for MCP
+                        context = [{"content": doc["content"], "metadata": doc["meta"]} for doc in rag_response["documents"]]
+                        logger.debug(f"Retrieved RAG context with {len(context)} documents")
                 except Exception as e:
-                    logger.error(f"Error getting context from LightRAG: {str(e)}")
-            
+                    logger.error(f"Error getting context from RAG: {str(e)}")
+
             # Process message with context
             await mcp.process_message_stream(message, context, websocket)
-            
+
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
     except Exception as e:
         logger.error(f"WebSocket error: {str(e)}")
         try:
-            await websocket.send_json({"type": "error", "content": str(e)})
+            await websocket.send_json({
+                "type": "error",
+                "content": str(e),
+                "error": str(e)
+            })
         except:
             pass
 
@@ -114,52 +120,65 @@ async def send_message(message: MessageRequest):
     """Send a message and get a response."""
     try:
         logger.debug(f"Processing message: {message.message}")
-        
-        # Get context from LightRAG if documents are uploaded
+
+        # Get context from RAG if documents are uploaded
         context = None
         if app.state.has_documents:
             try:
                 rag_response = await query_document(message.message)
-                if rag_response["status"] == "success":
-                    context = rag_response["response"]
-                    logger.debug("RAG context retrieved successfully")
+                if rag_response["status"] == "success" and rag_response.get("documents"):
+                    # Format context as list of dicts for MCP
+                    context = [{"content": doc["content"], "metadata": doc["meta"]} for doc in rag_response["documents"]]
+                    logger.debug(f"Retrieved RAG context with {len(context)} documents")
             except Exception as e:
-                logger.error(f"Error getting context from LightRAG: {str(e)}")
-        
+                logger.error(f"Error getting context from RAG: {str(e)}")
+
         # Process message with context
         result = await mcp.process_message(message.message, context)
-        
+
         if "error" in result:
             logger.error(f"Error processing message: {result['error']}")
-            return {"error": result["error"]}
-        
-        return result
+            return JSONResponse(
+                status_code=500,
+                content={"error": result["error"], "content": ""}
+            )
+
+        # Ensure we always return a properly formatted response
+        return JSONResponse(
+            content={
+                "content": result.get("content", ""),
+                "error": None
+            }
+        )
 
     except Exception as e:
         logger.error(f"Error in send_message: {str(e)}")
-        return {"error": str(e)}
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "content": ""}
+        )
 
 @app.post("/upload_document")
 async def upload_document(file: UploadFile = File(...)):
     """Upload and process a document."""
     try:
         logger.debug(f"Processing document upload: {file.filename}")
-        
+
         # Validate file
         if not file.filename:
             logger.error("No filename provided")
             raise HTTPException(status_code=400, detail="No filename provided")
-            
+
         # Check file extension
         allowed_extensions = {'.pdf', '.txt', '.docx', '.doc', '.md'}
         file_ext = os.path.splitext(file.filename)[1].lower()
         if file_ext not in allowed_extensions:
             logger.error(f"Unsupported file type: {file_ext}")
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"Unsupported file type. Allowed types: {', '.join(allowed_extensions)}"
             )
-        
+
         # Read file contents
         try:
             contents = await file.read()
@@ -169,18 +188,18 @@ async def upload_document(file: UploadFile = File(...)):
         except Exception as e:
             logger.error(f"Error reading file: {str(e)}")
             raise HTTPException(status_code=400, detail="Error reading file")
-        
+
         # Process document with LightRAG
         try:
-            text = contents.decode('utf-8')
-            result = await process_document(text)
-            
+            metadata = {"filename": file.filename}
+            result = await process_document(contents, metadata)
+
             if result["status"] == "error":
                 raise HTTPException(
                     status_code=500,
                     detail=f"Error processing document: {result['message']}"
                 )
-            
+
             app.state.has_documents = True
             logger.info(f"Document {file.filename} processed successfully")
             return JSONResponse(content={
@@ -193,19 +212,16 @@ async def upload_document(file: UploadFile = File(...)):
                 status_code=500,
                 detail=f"Error processing document: {str(e)}"
             )
-            
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error during document upload: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Unexpected error during document upload: {str(e)}"
-        )
+        logger.error(f"Unexpected error in upload_document: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 async def read_root():
     return FileResponse("static/index.html")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8000)
