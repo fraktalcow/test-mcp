@@ -1,15 +1,13 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import os
 import tempfile
 from dotenv import load_dotenv
 from mcp import MCP
-from document_rag import initialize_rag
-from lightrag.components import LightRAG, QueryParam
+from document_rag import initialize_rag, process_document, query_document
 import json
 import asyncio
 import uvicorn
@@ -26,14 +24,7 @@ load_dotenv()
 
 app = FastAPI()
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -43,6 +34,7 @@ try:
     logger.debug("Initializing MCP and LightRAG")
     mcp = MCP()
     app.state.rag = None  # Will be initialized in startup event
+    app.state.has_documents = False  # Track if documents are uploaded
     logger.info("MCP initialized successfully")
 except Exception as e:
     logger.error(f"Error initializing MCP: {str(e)}")
@@ -55,7 +47,6 @@ class MessageRequest(BaseModel):
     message: str
     settings: dict
     useRag: bool = False
-    documents: List[str] = []
 
 # WebSocket connection manager
 class ConnectionManager:
@@ -95,15 +86,14 @@ async def websocket_endpoint(websocket: WebSocket):
             
             logger.debug(f"WebSocket message received: {message[:100]}...")
             
-            # Get context from LightRAG if available
+            # Get context from LightRAG if documents are uploaded
             context = None
-            if app.state.rag:
+            if app.state.has_documents:
                 try:
-                    response = await app.state.rag.aquery(
-                        message,
-                        param=QueryParam(mode="hybrid")
-                    )
-                    context = response
+                    rag_response = await query_document(message)
+                    if rag_response["status"] == "success":
+                        context = rag_response["response"]
+                        logger.debug("RAG context retrieved successfully")
                 except Exception as e:
                     logger.error(f"Error getting context from LightRAG: {str(e)}")
             
@@ -125,15 +115,14 @@ async def send_message(message: MessageRequest):
     try:
         logger.debug(f"Processing message: {message.message}")
         
-        # Get context from LightRAG if available
+        # Get context from LightRAG if documents are uploaded
         context = None
-        if app.state.rag and message.useRag:
+        if app.state.has_documents:
             try:
-                response = await app.state.rag.aquery(
-                    message.message,
-                    param=QueryParam(mode="hybrid")
-                )
-                context = response
+                rag_response = await query_document(message.message)
+                if rag_response["status"] == "success":
+                    context = rag_response["response"]
+                    logger.debug("RAG context retrieved successfully")
             except Exception as e:
                 logger.error(f"Error getting context from LightRAG: {str(e)}")
         
@@ -184,7 +173,15 @@ async def upload_document(file: UploadFile = File(...)):
         # Process document with LightRAG
         try:
             text = contents.decode('utf-8')
-            await app.state.rag.ainsert(text)
+            result = await process_document(text)
+            
+            if result["status"] == "error":
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Error processing document: {result['message']}"
+                )
+            
+            app.state.has_documents = True
             logger.info(f"Document {file.filename} processed successfully")
             return JSONResponse(content={
                 "message": f"Document {file.filename} processed successfully",
