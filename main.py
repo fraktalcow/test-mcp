@@ -84,16 +84,16 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
             message = data.get("message", "")
+            use_rag = data.get("useRag", False)  # Get RAG flag from request
 
             logger.debug(f"WebSocket message received: {message[:100]}...")
 
-            # Get context from RAG if documents are uploaded
+            # Get context from RAG if documents are uploaded and RAG is requested
             context = None
-            if app.state.has_documents:
+            if use_rag and app.state.has_documents:
                 try:
                     rag_response = await query_document(message)
                     if rag_response["status"] == "success" and rag_response.get("documents"):
-                        # Format context as list of dicts for MCP
                         context = [{"content": doc["content"], "metadata": doc["meta"]} for doc in rag_response["documents"]]
                         logger.debug(f"Retrieved RAG context with {len(context)} documents")
                 except Exception as e:
@@ -109,8 +109,7 @@ async def websocket_endpoint(websocket: WebSocket):
         try:
             await websocket.send_json({
                 "type": "error",
-                "content": str(e),
-                "error": str(e)
+                "content": str(e)
             })
         except:
             pass
@@ -123,7 +122,7 @@ async def send_message(message: MessageRequest):
 
         # Get context from RAG if documents are uploaded
         context = None
-        if app.state.has_documents:
+        if message.useRag and app.state.has_documents:
             try:
                 rag_response = await query_document(message.message)
                 if rag_response["status"] == "success" and rag_response.get("documents"):

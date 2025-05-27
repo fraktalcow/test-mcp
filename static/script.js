@@ -78,13 +78,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const addMessage = (content, isUser = false) => {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
-        
+
         if (isUser) {
             messageDiv.textContent = content;
         } else {
             messageDiv.innerHTML = marked.parse(content);
         }
-        
+
         messagesContainer.appendChild(messageDiv);
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
         return messageDiv;
@@ -129,10 +129,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     fileInput.addEventListener('change', async (e) => {
         const files = Array.from(e.target.files);
-        
+
         for (const file of files) {
             if (uploadedDocuments.has(file.name)) continue;
-            
+
             const formData = new FormData();
             formData.append('file', file);
 
@@ -167,15 +167,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const settings = JSON.parse(localStorage.getItem('chatSettings') || '{}');
+            const useRag = message.startsWith('@');  // Use @ prefix for RAG queries
+
             const response = await fetch('/send_message', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    message,
+                    message: useRag ? message.substring(1) : message,  // Remove @ prefix if present
                     settings,
-                    useRag: message.startsWith('@'),
+                    useRag,
                     documents: Array.from(uploadedDocuments)
                 }),
             });
@@ -184,7 +186,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const errorData = await response.json();
                 throw new Error(errorData.detail || 'Network response was not ok');
             }
-            
+
             const data = await response.json();
             loadingIndicator.remove();
             addMessage(data.response);
@@ -210,4 +212,4 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Add welcome message
     addMessage("👋 Welcome! I'm your AI assistant. You can chat with me directly or use commands like /analyze, /translate, etc. for specific tasks.");
-}); 
+});

@@ -24,7 +24,7 @@ class MCP:
             self.api_key = os.getenv("OPENAI_API_KEY")
             if not self.api_key:
                 raise ValueError("OPENAI_API_KEY environment variable is not set")
-            
+
             self.client = OpenAI(api_key=self.api_key)
             self.model = os.getenv("OPENAI_MODEL", "gpt-4")
             self.tools = OpenAITools(api_key=self.api_key)
@@ -57,6 +57,7 @@ When using context:
 - If the answer isn't in the context, provide a natural response based on your knowledge
 - If no context is provided, answer based on your general knowledge
 - Always maintain a natural conversation flow
+- Use context7 format for citations when available
 
 Question: {question}"""
 
@@ -125,7 +126,7 @@ Question: {question}"""
         """Process a message and return the response."""
         try:
             logger.debug(f"Processing message: {message[:100]}...")
-            
+
             # Check if it's a tool command
             command = self.tools.extract_command(message)
             if command:
@@ -177,14 +178,14 @@ Question: {question}"""
             if command:
                 result = await self.tools.execute_command(command, message)
                 response = self.format_response(command, result)
-                
+
                 if websocket:
                     await websocket.send_json({
                         "type": "tool_response",
                         "content": response
                     })
                 return response
-            
+
             # If no tool command, process as regular message
             if websocket:
                 await self.process_message_stream(message, context, websocket)
@@ -224,4 +225,4 @@ Question: {question}"""
         elif command == "entities":
             return "👥 **Entities:**\n" + "\n".join(f"• {e}" for e in result['entities'])
         else:
-            return str(result) 
+            return str(result)

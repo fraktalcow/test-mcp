@@ -107,6 +107,15 @@ async def query_document(query: str, top_k: int = 3) -> Dict[str, Any]:
     """Query document store"""
     try:
         logger.debug(f"Processing query: {query}")
+
+        # Check if document store is empty
+        if not document_store.get_all_documents():
+            logger.debug("Document store is empty, returning empty result")
+            return {
+                "status": "success",
+                "documents": []
+            }
+
         results = search_pipeline.run(query=query, params={"Retriever": {"top_k": top_k}})
         documents = []
         for doc in results["documents"]:
