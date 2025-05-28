@@ -1,3 +1,4 @@
 .env
 .cursor/rules/mcp-rules.mdc
 __pycache__/
+.venv/

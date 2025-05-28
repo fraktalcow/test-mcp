@@ -2,12 +2,11 @@ import os
 import logging
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
-from haystack.document_stores import InMemoryDocumentStore
-from haystack.nodes import EmbeddingRetriever
-from haystack.pipelines import DocumentSearchPipeline
-from sentence_transformers import SentenceTransformer
-from pypdf import PdfReader
+from haystack.document_stores.in_memory import InMemoryDocumentStore
+from haystack.components import MemoryRetriever
+from haystack.components.embedders import SentenceTransformersTextEmbedder
 import io
+from pypdf import PdfReader
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -21,20 +20,15 @@ WORKING_DIR = os.getenv("WORKING_DIR", "working_dir")
 os.makedirs(WORKING_DIR, exist_ok=True)
 
 # Create document store
-document_store = InMemoryDocumentStore(embedding_dim=384)
+embedding_dim = 384
+document_store = InMemoryDocumentStore(embedding_dim=embedding_dim)
 
-# Initialize retriever
-retriever = EmbeddingRetriever(
-    document_store=document_store,
-    embedding_model="sentence-transformers/all-MiniLM-L6-v2",
-    model_format="sentence_transformers"
-)
-
-# Initialize search pipeline
-search_pipeline = DocumentSearchPipeline(retriever=retriever)
+# Initialize retriever and embedder
+retriever = MemoryRetriever(document_store=document_store, top_k=3, retrieval_method="embedding")
+embedder = SentenceTransformersTextEmbedder(model="sentence-transformers/all-MiniLM-L6-v2")
 
 async def initialize_rag() -> Dict[str, Any]:
-    """Initialize the RAG system"""
+    """Initialize the RAG system (dummy for compatibility)"""
     try:
         return {"status": "success", "message": "RAG system initialized successfully"}
     except Exception as e:
@@ -48,7 +42,7 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
         reader = PdfReader(pdf_file)
         text = ""
         for i, page in enumerate(reader.pages):
-            page_text = page.extract_text()
+            page_text = page.extract_text() or ""
             logger.debug(f"Extracted {len(page_text)} characters from page {i+1}")
             text += page_text + "\n"
         return text.strip()
@@ -95,7 +89,9 @@ async def process_document(content: str | bytes, metadata: Optional[Dict[str, An
         document_store.write_documents([doc])
 
         logger.debug("Updating embeddings...")
-        document_store.update_embeddings(retriever)
+        docs = document_store.filter_documents()
+        docs_with_embeddings = embedder.run(documents=docs)["documents"]
+        document_store.write_documents(documents=docs_with_embeddings, policy="OVERWRITE")
 
         logger.debug("Document processing completed successfully")
         return {"status": "success", "message": "Document processed successfully"}
@@ -109,20 +105,23 @@ async def query_document(query: str, top_k: int = 3) -> Dict[str, Any]:
         logger.debug(f"Processing query: {query}")
 
         # Check if document store is empty
-        if not document_store.get_all_documents():
+        if not document_store.filter_documents():
             logger.debug("Document store is empty, returning empty result")
             return {
                 "status": "success",
                 "documents": []
             }
 
-        results = search_pipeline.run(query=query, params={"Retriever": {"top_k": top_k}})
+        # Embed the query
+        query_embedding = embedder.run(texts=[query])["embeddings"][0]
+        # Retrieve documents
+        results = retriever.run(query_embedding=query_embedding, top_k=top_k)
         documents = []
         for doc in results["documents"]:
             documents.append({
                 "content": doc.content,
                 "meta": doc.meta,
-                "score": doc.score
+                "score": getattr(doc, "score", None)
             })
         logger.debug(f"Found {len(documents)} matching documents")
         return {
